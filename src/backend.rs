@@ -108,9 +108,7 @@ impl LanguageServer for CadhrBackend {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.documents.write().await.remove(&uri);
-        self.client
-            .publish_diagnostics(uri, vec![], None)
-            .await;
+        self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
     async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {
