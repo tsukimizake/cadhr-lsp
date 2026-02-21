@@ -1,44 +1,32 @@
 use tower_lsp::lsp_types::*;
-use tree_sitter::Tree;
 
-pub fn hover_info(tree: &Tree, source: &str, position: Position) -> Option<Hover> {
-    let point = tree_sitter::Point {
-        row: position.line as usize,
-        column: position.character as usize,
-    };
+use crate::clause_info::ClauseInfo;
 
-    let node = tree.root_node().descendant_for_point_range(point, point)?;
-
-    // Walk up to find the atom node (functor name)
-    let atom_node = if node.kind() == "unquoted_atom" {
-        Some(node)
-    } else if node.kind() == "atom" {
-        node.child(0) // unquoted_atom inside atom
-    } else {
-        None
-    };
-
-    let atom_node = atom_node?;
-    let name = atom_node.utf8_text(source.as_bytes()).ok()?;
-
-    let doc = functor_doc(name)?;
+pub fn hover_info(clauses: &[ClauseInfo], name: &str, atom_range: Range) -> Option<Hover> {
+    let doc = functor_doc(name)
+        .map(|s| s.to_string())
+        .or_else(|| user_defined_doc(clauses, name));
+    let doc = doc?;
 
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: doc.to_string(),
+            value: doc,
         }),
-        range: Some(Range {
-            start: Position {
-                line: atom_node.start_position().row as u32,
-                character: atom_node.start_position().column as u32,
-            },
-            end: Position {
-                line: atom_node.end_position().row as u32,
-                character: atom_node.end_position().column as u32,
-            },
-        }),
+        range: Some(atom_range),
     })
+}
+
+fn user_defined_doc(clauses: &[ClauseInfo], name: &str) -> Option<String> {
+    let ci = clauses.iter().find(|c| c.head_name == name)?;
+
+    let mut parts = Vec::new();
+    parts.push(format!("**{}**", ci.head_text));
+    if let Some(ref d) = ci.doc {
+        parts.push(String::new());
+        parts.push(d.clone());
+    }
+    Some(parts.join("\n"))
 }
 
 fn functor_doc(name: &str) -> Option<&'static str> {

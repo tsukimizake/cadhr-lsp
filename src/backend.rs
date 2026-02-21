@@ -6,7 +6,8 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
-use crate::completion::completion_items;
+use crate::clause_info::{collect_clauses, find_all_atom_occurrences};
+use crate::completion::{builtin_completion_items, user_defined_completion_items};
 use crate::diagnostics::compute_diagnostics;
 use crate::hover::hover_info;
 
@@ -29,12 +30,13 @@ impl CadhrBackend {
         }
     }
 
+    fn parse(&self, text: &str) -> Option<tree_sitter::Tree> {
+        let mut parser = self.parser.lock().unwrap();
+        parser.parse(text, None)
+    }
+
     async fn publish_diagnostics(&self, uri: Url, text: &str) {
-        let tree = {
-            let mut parser = self.parser.lock().unwrap();
-            parser.parse(text, None)
-        };
-        let diagnostics = match tree {
+        let diagnostics = match self.parse(text) {
             Some(tree) => compute_diagnostics(&tree, text),
             None => vec![],
         };
@@ -57,6 +59,8 @@ impl LanguageServer for CadhrBackend {
                     ..Default::default()
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -111,24 +115,108 @@ impl LanguageServer for CadhrBackend {
         self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
-    async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        Ok(Some(CompletionResponse::Array(completion_items())))
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let mut items = builtin_completion_items();
+
+        let uri = params.text_document_position.text_document.uri;
+        let docs = self.documents.read().await;
+        let user_items = docs.get(&uri).and_then(|text| {
+            let tree = self.parse(text)?;
+            let clauses = collect_clauses(&tree, text);
+            Some(user_defined_completion_items(&clauses, &items))
+        });
+        if let Some(extra) = user_items {
+            items.extend(extra);
+        }
+
+        Ok(Some(CompletionResponse::Array(items)))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
         let docs = self.documents.read().await;
-        let Some(text) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let tree = {
-            let mut parser = self.parser.lock().unwrap();
-            parser.parse(text.as_str(), None)
-        };
-        let Some(tree) = tree else {
-            return Ok(None);
-        };
-        Ok(hover_info(&tree, text, pos))
+        let result = docs.get(&uri).and_then(|text| {
+            let tree = self.parse(text)?;
+            let (name, atom_range) = atom_at(&tree, text, pos)?;
+            let clauses = collect_clauses(&tree, text);
+            hover_info(&clauses, &name, atom_range)
+        });
+        Ok(result)
     }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let docs = self.documents.read().await;
+        let result = docs.get(&uri).and_then(|text| {
+            let tree = self.parse(text)?;
+            let (name, _) = atom_at(&tree, text, pos)?;
+            let clauses = collect_clauses(&tree, text);
+            clauses
+                .iter()
+                .find(|c| c.head_name == name)
+                .map(|ci| {
+                    GotoDefinitionResponse::Scalar(Location {
+                        uri: uri.clone(),
+                        range: ci.head_range,
+                    })
+                })
+        });
+        Ok(result)
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let pos = params.text_document_position.position;
+        let docs = self.documents.read().await;
+        let result = docs.get(&uri).and_then(|text| {
+            let tree = self.parse(text)?;
+            let (name, _) = atom_at(&tree, text, pos)?;
+            let locs: Vec<Location> = find_all_atom_occurrences(&tree, text, &name)
+                .into_iter()
+                .map(|r| Location {
+                    uri: uri.clone(),
+                    range: r,
+                })
+                .collect();
+            if locs.is_empty() { None } else { Some(locs) }
+        });
+        Ok(result)
+    }
+}
+
+fn atom_at(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    pos: Position,
+) -> Option<(String, Range)> {
+    let point = tree_sitter::Point {
+        row: pos.line as usize,
+        column: pos.character as usize,
+    };
+    tree.root_node()
+        .descendant_for_point_range(point, point)
+        .and_then(|node| match node.kind() {
+            "unquoted_atom" => Some(node),
+            "atom" => node.child(0),
+            _ => None,
+        })
+        .and_then(|atom| {
+            let name = atom.utf8_text(source.as_bytes()).ok()?;
+            let range = Range {
+                start: Position {
+                    line: atom.start_position().row as u32,
+                    character: atom.start_position().column as u32,
+                },
+                end: Position {
+                    line: atom.end_position().row as u32,
+                    character: atom.end_position().column as u32,
+                },
+            };
+            Some((name.to_string(), range))
+        })
 }

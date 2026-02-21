@@ -1,4 +1,5 @@
 mod backend;
+mod clause_info;
 mod completion;
 mod diagnostics;
 mod hover;
