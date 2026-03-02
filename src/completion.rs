@@ -66,6 +66,66 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "Transform: rotate shape (degrees)",
             "rotate($1)",
         ),
+        builtin(
+            "polygon",
+            "polygon([p(X,Y), ...])",
+            "2D profile: polygon from point list",
+            "polygon([$1])",
+        ),
+        builtin(
+            "circle",
+            "circle(R) / circle(R, Segments)",
+            "2D profile: circle",
+            "circle($1)",
+        ),
+        builtin(
+            "path",
+            "path(Start, [line_to(..), bezier_to(..), ...])",
+            "2D profile: path with line and Bézier segments",
+            "path(p($1), [$2])",
+        ),
+        builtin(
+            "line_to",
+            "line_to(p(X,Y))",
+            "Path segment: straight line to point",
+            "line_to(p($1))",
+        ),
+        builtin(
+            "bezier_to",
+            "bezier_to(CP, End) / bezier_to(CP1, CP2, End)",
+            "Path segment: quadratic or cubic Bézier curve",
+            "bezier_to(p($1), p($2))",
+        ),
+        builtin(
+            "extrude",
+            "extrude(Profile, Height)",
+            "Extrude a 2D profile along Z axis",
+            "extrude($1)",
+        ),
+        builtin(
+            "revolve",
+            "revolve(Profile, Degrees) / revolve(Profile, Degrees, Segments)",
+            "Revolve a 2D profile around Y axis",
+            "revolve($1)",
+        ),
+        builtin(
+            "polyhedron",
+            "polyhedron(Points, Faces)",
+            "Polyhedron from vertex list and face index lists",
+            "polyhedron([$1], [$2])",
+        ),
+        builtin(
+            "stl",
+            "stl(\"path/to/file.stl\")",
+            "Import mesh from STL file",
+            "stl(\"$1\")",
+        ),
+        builtin(
+            "control",
+            "control(X, Y, Z) / control(X, Y, Z, Name)",
+            "Draggable control point in the viewport",
+            "control($1)",
+        ),
     ]
 }
 

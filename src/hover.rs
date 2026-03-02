@@ -51,6 +51,16 @@ fn functor_doc(name: &str) -> Option<&'static str> {
         "translate" => Some("**translate(Shape, X, Y, Z)**\n\nMove shape by (X, Y, Z)."),
         "scale" => Some("**scale(Shape, X, Y, Z)**\n\nScale shape by factors (X, Y, Z)."),
         "rotate" => Some("**rotate(Shape, X, Y, Z)**\n\nRotate shape by (X, Y, Z) degrees."),
+        "polygon" => Some("**polygon([p(X,Y), ...])**\n\n2D polygon profile from a list of points."),
+        "circle" => Some("**circle(R)** / **circle(R, Segments)**\n\n2D circle profile with radius R. Default 32 segments."),
+        "path" => Some("**path(Start, [Segments...])**\n\n2D path profile built from `line_to` and `bezier_to` segments.\n\nExample:\n```\npath(p(0,0), [\n  line_to(p(10,0)),\n  bezier_to(p(15,5), p(10,10)),\n  bezier_to(p(5,15), p(0,10), p(0,0))\n])\n```"),
+        "line_to" => Some("**line_to(p(X,Y))**\n\nPath segment: straight line to the given point."),
+        "bezier_to" => Some("**bezier_to(CP, End)** / **bezier_to(CP1, CP2, End)**\n\nPath segment: quadratic (1 control point) or cubic (2 control points) Bézier curve."),
+        "extrude" => Some("**extrude(Profile, Height)**\n\nExtrude a 2D profile (polygon, circle, path) along the Z axis."),
+        "revolve" => Some("**revolve(Profile, Degrees)** / **revolve(Profile, Degrees, Segments)**\n\nRevolve a 2D profile around the Y axis. Default 32 segments."),
+        "polyhedron" => Some("**polyhedron(Points, Faces)**\n\nConstruct a polyhedron from a list of 3D points and face index lists."),
+        "stl" => Some("**stl(\"path/to/file.stl\")**\n\nImport a mesh from an STL file."),
+        "control" => Some("**control(X, Y, Z)** / **control(X, Y, Z, Name)**\n\nDraggable control point in the viewport. Variables are bound to the drag position."),
         _ => None,
     }
 }
