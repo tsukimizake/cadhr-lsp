@@ -572,10 +572,10 @@ mod tests {
     }
 
     #[test]
-    fn test_polygon() {
+    fn test_sketch_xy() {
         assert_eq!(
-            format("polygon([p(0,0),p(10,0),p(10,10)])."),
-            "polygon([p(0, 0), p(10, 0), p(10, 10)]).\n"
+            format("sketchXY([p(0,0),p(10,0),p(10,10)])."),
+            "sketchXY([p(0, 0), p(10, 0), p(10, 10)]).\n"
         );
     }
 

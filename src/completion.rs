@@ -73,10 +73,22 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "rotate($1)",
         ),
         builtin(
-            "polygon",
-            "polygon([p(X,Y), ...])",
-            "2D profile: polygon from point list",
-            "polygon([$1])",
+            "sketchXY",
+            "sketchXY([p(X,Y), ...])",
+            "2D sketch on XY plane",
+            "sketchXY([$1])",
+        ),
+        builtin(
+            "sketchYZ",
+            "sketchYZ([p(Y,Z), ...])",
+            "2D sketch on YZ plane",
+            "sketchYZ([$1])",
+        ),
+        builtin(
+            "sketchXZ",
+            "sketchXZ([p(X,Z), ...])",
+            "2D sketch on XZ plane",
+            "sketchXZ([$1])",
         ),
         builtin(
             "circle",
