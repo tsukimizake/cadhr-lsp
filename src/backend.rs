@@ -9,6 +9,7 @@ use tower_lsp::{Client, LanguageServer};
 use crate::clause_info::{collect_clauses, find_all_atom_occurrences};
 use crate::completion::{builtin_completion_items, user_defined_completion_items};
 use crate::diagnostics::compute_diagnostics;
+use crate::formatting;
 use crate::hover::hover_info;
 
 pub struct CadhrBackend {
@@ -59,6 +60,7 @@ impl LanguageServer for CadhrBackend {
                     ..Default::default()
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 ..Default::default()
@@ -184,6 +186,24 @@ impl LanguageServer for CadhrBackend {
                 })
                 .collect();
             if locs.is_empty() { None } else { Some(locs) }
+        });
+        Ok(result)
+    }
+
+    async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let docs = self.documents.read().await;
+        let result = docs.get(&uri).and_then(|text| {
+            let tree = self.parse(text)?;
+            let edits = formatting::format_document(&tree, text);
+            if edits.is_empty() {
+                None
+            } else {
+                Some(edits)
+            }
         });
         Ok(result)
     }

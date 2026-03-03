@@ -2,6 +2,7 @@ mod backend;
 mod clause_info;
 mod completion;
 mod diagnostics;
+mod formatting;
 mod hover;
 
 use backend::CadhrBackend;
