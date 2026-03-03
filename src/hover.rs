@@ -48,6 +48,9 @@ fn functor_doc(name: &str) -> Option<&'static str> {
         "intersection" => Some(
             "**intersection(A, B)**\n\nBoolean intersection of shapes A and B. Also available as `A * B`.",
         ),
+        "hull" => Some(
+            "**hull(A, B)**\n\nConvex hull of shapes A and B.",
+        ),
         "translate" => Some("**translate(Shape, X, Y, Z)**\n\nMove shape by (X, Y, Z)."),
         "scale" => Some("**scale(Shape, X, Y, Z)**\n\nScale shape by factors (X, Y, Z)."),
         "rotate" => Some("**rotate(Shape, X, Y, Z)**\n\nRotate shape by (X, Y, Z) degrees."),

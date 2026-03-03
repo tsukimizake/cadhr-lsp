@@ -49,6 +49,12 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "intersection($1)",
         ),
         builtin(
+            "hull",
+            "hull(A, B)",
+            "CSG: convex hull of A and B",
+            "hull($1)",
+        ),
+        builtin(
             "translate",
             "translate(Shape, X, Y, Z)",
             "Transform: move shape",
