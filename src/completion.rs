@@ -103,10 +103,16 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "bezier_to(p($1), p($2))",
         ),
         builtin(
-            "extrude",
-            "extrude(Profile, Height)",
+            "linear_extrude",
+            "linear_extrude(Profile, Height)",
             "Extrude a 2D profile along Z axis",
-            "extrude($1)",
+            "linear_extrude($1)",
+        ),
+        builtin(
+            "complex_extrude",
+            "complex_extrude(Profile, Height, Twist, ScaleX, ScaleY)",
+            "Extrude with twist and scaling",
+            "complex_extrude($1)",
         ),
         builtin(
             "revolve",
