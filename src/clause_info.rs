@@ -7,7 +7,6 @@ pub struct ClauseInfo {
     pub arity: usize,
     pub doc: Option<String>,
     pub head_range: Range,
-    pub clause_range: Range,
 }
 
 pub fn collect_clauses(tree: &Tree, source: &str) -> Vec<ClauseInfo> {
@@ -94,7 +93,6 @@ fn extract_clause_info(clause_node: Node, source: &str, doc: Option<String>) -> 
         arity,
         doc,
         head_range: ts_range_to_lsp(head_term),
-        clause_range: ts_range_to_lsp(clause_node),
     })
 }
 
@@ -129,10 +127,6 @@ fn resolve_head_name_arity(node: Node, source: &str) -> Option<(String, usize)> 
         }
         _ => None,
     }
-}
-
-pub fn resolve_head_atom_name(node: Node, source: &str) -> Option<String> {
-    resolve_head_name_arity(node, source).map(|(name, _)| name)
 }
 
 pub fn atom_text(node: Node, source: &str) -> String {
