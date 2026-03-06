@@ -150,6 +150,12 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "Draggable control point in the viewport",
             "control($1)",
         ),
+        builtin(
+            "bom",
+            "bom(\"Name\", [prop(Value), ...])",
+            "Bill of materials entry",
+            "bom(\"$1\", [$2])",
+        ),
     ]
 }
 

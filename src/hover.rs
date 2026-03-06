@@ -67,6 +67,7 @@ fn functor_doc(name: &str) -> Option<&'static str> {
         "polyhedron" => Some("**polyhedron(Points, Faces)**\n\nConstruct a polyhedron from a list of 3D points and face index lists."),
         "stl" => Some("**stl(\"path/to/file.stl\")**\n\nImport a mesh from an STL file."),
         "control" => Some("**control(X, Y, Z)** / **control(X, Y, Z, Name)**\n\nDraggable control point in the viewport. Variables are bound to the drag position."),
+        "bom" => Some("**bom(\"Name\", [prop(Value), ...])**\n\nBill of materials entry. Properties are functor(value) pairs in a list.\n\nExample:\n```\nbom(\"aluminum_extrusion\", [len(100), width(50)])\n```"),
         _ => None,
     }
 }
