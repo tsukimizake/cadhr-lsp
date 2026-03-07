@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use tower_lsp::lsp_types::*;
 
-use crate::clause_info::ClauseInfo;
+use crate::clause_info::{ClauseInfo, UseInfo, collect_clauses, resolve_module_file};
 
 pub fn builtin_completion_items() -> Vec<CompletionItem> {
     vec![
@@ -145,6 +146,12 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "stl(\"$1\")",
         ),
         builtin(
+            "color",
+            "color(Shape, R, G, B)",
+            "Set preview color (RGB: 0.0–1.0)",
+            "color($1)",
+        ),
+        builtin(
             "control",
             "control(X, Y, Z) / control(X, Y, Z, Name)",
             "Draggable control point in the viewport",
@@ -156,6 +163,17 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "Bill of materials entry",
             "bom(\"$1\", [$2])",
         ),
+        CompletionItem {
+            label: "#use".to_string(),
+            kind: Some(CompletionItemKind::KEYWORD),
+            detail: Some("#use(\"module\") / #use(\"module\", expose([...]))".to_string()),
+            documentation: Some(Documentation::String(
+                "Import definitions from another .cadhr file".to_string(),
+            )),
+            insert_text: Some("#use(\"$1\").".to_string()),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            ..Default::default()
+        },
     ]
 }
 
@@ -209,6 +227,87 @@ pub fn user_defined_completion_items(
             }
         })
         .collect()
+}
+
+pub fn module_completion_items(
+    use_directives: &[UseInfo],
+    current_file: &Path,
+) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    for ud in use_directives {
+        let module_file = match resolve_module_file(&ud.module_path, current_file) {
+            Some(f) => f,
+            None => continue,
+        };
+        let source = match std::fs::read_to_string(&module_file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let mut parser = tree_sitter::Parser::new();
+        if parser
+            .set_language(tree_sitter_cadhr_lang::language())
+            .is_err()
+        {
+            continue;
+        }
+        let tree = match parser.parse(&source, None) {
+            Some(t) => t,
+            None => continue,
+        };
+        let clauses = collect_clauses(&tree, &source);
+        let module_name = Path::new(&ud.module_path)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        for ci in &clauses {
+            let qualified_name = format!("{}::{}", module_name, ci.head_name);
+            let snippet = if ci.arity == 0 {
+                qualified_name.clone()
+            } else {
+                format!("{}($1)", qualified_name)
+            };
+            items.push(CompletionItem {
+                label: qualified_name,
+                kind: Some(if ci.arity == 0 {
+                    CompletionItemKind::CONSTANT
+                } else {
+                    CompletionItemKind::FUNCTION
+                }),
+                detail: Some(ci.head_text.clone()),
+                documentation: ci.doc.clone().map(Documentation::String),
+                insert_text: Some(snippet),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                ..Default::default()
+            });
+
+            // expose されたfunctorは非修飾版も追加
+            if ud.expose.contains(&ci.head_name) {
+                let snippet = if ci.arity == 0 {
+                    ci.head_name.clone()
+                } else {
+                    format!("{}($1)", ci.head_name)
+                };
+                items.push(CompletionItem {
+                    label: ci.head_name.clone(),
+                    kind: Some(if ci.arity == 0 {
+                        CompletionItemKind::CONSTANT
+                    } else {
+                        CompletionItemKind::FUNCTION
+                    }),
+                    detail: Some(format!("{} (from {})", ci.head_text, module_name)),
+                    documentation: ci.doc.clone().map(Documentation::String),
+                    insert_text: Some(snippet),
+                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    items
 }
 
 fn builtin(label: &str, detail: &str, doc: &str, snippet: &str) -> CompletionItem {

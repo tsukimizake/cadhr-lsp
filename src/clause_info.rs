@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Tree};
 
@@ -7,6 +9,64 @@ pub struct ClauseInfo {
     pub arity: usize,
     pub doc: Option<String>,
     pub head_range: Range,
+}
+
+pub struct UseInfo {
+    pub module_path: String,
+    pub expose: Vec<String>,
+    pub string_range: Range,
+}
+
+pub fn collect_use_directives(tree: &Tree, source: &str) -> Vec<UseInfo> {
+    let root = tree.root_node();
+    let mut result = Vec::new();
+    for i in 0..root.child_count() {
+        let child = root.child(i).unwrap();
+        if child.kind() == "use_directive" {
+            if let Some(info) = extract_use_info(child, source) {
+                result.push(info);
+            }
+        }
+    }
+    result
+}
+
+fn extract_use_info(node: Node, source: &str) -> Option<UseInfo> {
+    let mut module_path = None;
+    let mut string_range = None;
+    let mut expose = Vec::new();
+
+    for i in 0..node.child_count() {
+        let child = node.child(i).unwrap();
+        match child.kind() {
+            "string_literal" => {
+                let text = &source[child.byte_range()];
+                module_path = Some(text.trim_matches('"').to_string());
+                string_range = Some(ts_range_to_lsp(child));
+            }
+            "use_expose" => {
+                for j in 0..child.child_count() {
+                    let ec = child.child(j).unwrap();
+                    if ec.kind() == "atom" {
+                        expose.push(atom_text(ec, source));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Some(UseInfo {
+        module_path: module_path?,
+        expose,
+        string_range: string_range?,
+    })
+}
+
+pub fn resolve_module_file(module_path: &str, current_file: &Path) -> Option<PathBuf> {
+    let dir = current_file.parent()?;
+    let candidate = dir.join(format!("{}.cadhr", module_path));
+    candidate.is_file().then_some(candidate)
 }
 
 pub fn collect_clauses(tree: &Tree, source: &str) -> Vec<ClauseInfo> {
@@ -96,23 +156,43 @@ fn extract_clause_info(clause_node: Node, source: &str, doc: Option<String>) -> 
     })
 }
 
+fn qualified_atom_text(node: Node, source: &str) -> String {
+    let mut parts = Vec::new();
+    for i in 0..node.child_count() {
+        let c = node.child(i).unwrap();
+        if c.kind() == "atom" {
+            parts.push(atom_text(c, source));
+        }
+    }
+    parts.join("::")
+}
+
 fn resolve_head_name_arity(node: Node, source: &str) -> Option<(String, usize)> {
     match node.kind() {
         "struct" => {
-            let atom = (0..node.child_count()).find_map(|i| {
+            let name_node = (0..node.child_count()).find_map(|i| {
                 let c = node.child(i).unwrap();
-                if c.kind() == "atom" || c.kind() == "unquoted_atom" || c.kind() == "quoted_atom" {
+                if c.kind() == "qualified_atom"
+                    || c.kind() == "atom"
+                    || c.kind() == "unquoted_atom"
+                    || c.kind() == "quoted_atom"
+                {
                     Some(c)
                 } else {
                     None
                 }
             })?;
-            let name = atom_text(atom, source);
+            let name = if name_node.kind() == "qualified_atom" {
+                qualified_atom_text(name_node, source)
+            } else {
+                atom_text(name_node, source)
+            };
             let arity = (0..node.child_count())
                 .filter(|&i| node.child(i).unwrap().kind() == "term")
                 .count();
             Some((name, arity))
         }
+        "qualified_atom" => Some((qualified_atom_text(node, source), 0)),
         "atom" | "unquoted_atom" | "quoted_atom" => {
             Some((atom_text(node, source), 0))
         }

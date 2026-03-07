@@ -66,8 +66,10 @@ fn functor_doc(name: &str) -> Option<&'static str> {
         "revolve" => Some("**revolve(Profile, Degrees)** / **revolve(Profile, Degrees, Segments)**\n\nRevolve a 2D profile around the Y axis. Default 32 segments."),
         "polyhedron" => Some("**polyhedron(Points, Faces)**\n\nConstruct a polyhedron from a list of 3D points and face index lists."),
         "stl" => Some("**stl(\"path/to/file.stl\")**\n\nImport a mesh from an STL file."),
+        "color" => Some("**color(Shape, R, G, B)**\n\nSet the preview color of a shape. R, G, B are 0.0–1.0."),
         "control" => Some("**control(X, Y, Z)** / **control(X, Y, Z, Name)**\n\nDraggable control point in the viewport. Variables are bound to the drag position."),
         "bom" => Some("**bom(\"Name\", [prop(Value), ...])**\n\nBill of materials entry. Properties are functor(value) pairs in a list.\n\nExample:\n```\nbom(\"aluminum_extrusion\", [len(100), width(50)])\n```"),
+        "#use" => Some("**#use(\"module\")**\n\nImport definitions from another `.cadhr` file.\n\n- `#use(\"bolts\").` — access as `bolts::xxx`\n- `#use(\"bolts\", expose([m5])).` — `m5` also available unqualified"),
         _ => None,
     }
 }

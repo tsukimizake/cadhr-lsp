@@ -50,6 +50,14 @@ fn format_source_file(node: Node, src: &[u8]) -> String {
             }
             result.push_str(node_text(&child, src).trim_end());
             prev_was_clause = false;
+        } else if child.kind() == "use_directive" {
+            if prev_was_clause {
+                result.push_str("\n\n");
+            } else if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(node_text(&child, src).trim_end());
+            prev_was_clause = false;
         } else if child.kind() == "clause" {
             if prev_was_clause {
                 result.push_str("\n\n");
@@ -191,6 +199,7 @@ fn format_expr(node: Node, src: &[u8], indent: usize) -> String {
         "paren_expr" => format_paren_expr(node, src, indent),
         "default_var" => format_default_var(node, src),
         "range_var" => format_range_var(node, src),
+        "qualified_atom" => format_qualified_atom(node, src),
         "atom" | "unquoted_atom" | "quoted_atom" | "number" | "variable" => {
             node_text(&node, src).to_string()
         }
@@ -198,31 +207,111 @@ fn format_expr(node: Node, src: &[u8], indent: usize) -> String {
     }
 }
 
+enum InfixItem {
+    Operand(String),
+    Operator(String),
+    Comment(String),
+}
+
 fn format_infix_expr(node: Node, src: &[u8], indent: usize) -> String {
-    let mut result = String::new();
+    let mut items = Vec::new();
     let mut cursor = node.walk();
-    let mut need_space = false;
+    let mut has_comments = false;
 
     for child in node.children(&mut cursor) {
         if is_comment(&child) {
-            continue;
-        }
-        if child.is_named() {
-            if need_space {
-                result.push(' ');
-            }
-            result.push_str(&format_expr(child, src, indent));
-            need_space = false;
+            items.push(InfixItem::Comment(
+                node_text(&child, src).trim_end().to_string(),
+            ));
+            has_comments = true;
+        } else if child.is_named() {
+            items.push(InfixItem::Operand(format_expr(child, src, indent)));
         } else {
             let text = node_text(&child, src).trim();
             if !text.is_empty() {
-                result.push(' ');
-                result.push_str(text);
+                items.push(InfixItem::Operator(text.to_string()));
+            }
+        }
+    }
+
+    if !has_comments {
+        let mut result = String::new();
+        let mut need_space = false;
+        for item in &items {
+            match item {
+                InfixItem::Operand(s) => {
+                    if need_space {
+                        result.push(' ');
+                    }
+                    result.push_str(s);
+                    need_space = false;
+                }
+                InfixItem::Operator(s) => {
+                    result.push(' ');
+                    result.push_str(s);
+                    need_space = true;
+                }
+                InfixItem::Comment(_) => unreachable!(),
+            }
+        }
+        return result;
+    }
+
+    let indent_str = " ".repeat(indent);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+    let mut need_space = false;
+
+    for item in &items {
+        match item {
+            InfixItem::Comment(c) => {
+                if !current_line.is_empty() {
+                    lines.push(current_line.clone());
+                    current_line.clear();
+                    need_space = false;
+                }
+                lines.push(c.clone());
+            }
+            InfixItem::Operand(s) => {
+                if need_space {
+                    current_line.push(' ');
+                }
+                current_line.push_str(s);
+                need_space = false;
+            }
+            InfixItem::Operator(s) => {
+                if !current_line.is_empty() {
+                    current_line.push(' ');
+                }
+                current_line.push_str(s);
                 need_space = true;
             }
         }
     }
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    let mut result = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+            result.push_str(&indent_str);
+        }
+        result.push_str(line);
+    }
     result
+}
+
+fn format_qualified_atom(node: Node, src: &[u8]) -> String {
+    let mut parts = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "atom" {
+            parts.push(node_text(&child, src).to_string());
+        }
+    }
+    parts.join("::")
 }
 
 fn format_struct(node: Node, src: &[u8], indent: usize) -> String {
@@ -234,7 +323,7 @@ fn format_struct(node: Node, src: &[u8], indent: usize) -> String {
 
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "atom" => name = format_expr(child, src, indent),
+            "atom" | "qualified_atom" => name = format_expr(child, src, indent),
             "term" => items.push(Item::Term(format_term(child, src, inner_indent))),
             "line_comment" | "block_comment" => {
                 items.push(Item::Comment(
@@ -430,6 +519,42 @@ mod tests {
     fn format(source: &str) -> String {
         let tree = parse(source);
         format_source_file(tree.root_node(), source.as_bytes())
+    }
+
+    fn dump_tree(node: tree_sitter::Node, src: &[u8], depth: usize) {
+        let indent = "  ".repeat(depth);
+        let text = node.utf8_text(src).unwrap_or("???");
+        let short = if text.len() > 60 { &text[..60] } else { text };
+        eprintln!("{}{}  {:?}", indent, node.kind(), short.replace('\n', "\\n"));
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            dump_tree(child, src, depth + 1);
+        }
+    }
+
+    #[test]
+    fn debug_tree_structure() {
+        let cases = vec![
+            ("between clauses", "foo(1).\n% comment\nbar(2)."),
+            ("trailing comment", "foo(1). % trailing\nbar(2)."),
+            ("comment before fact", "% leading\nfoo(1)."),
+            ("comment between goals", "foo(X) :-\n    bar(X),\n    % mid\n    baz(X)."),
+            ("comment in multiline struct", "translate(\n    % offset\n    cube(1, 1, 1),\n    5, 0, 0\n)."),
+            ("comment in fact inline", "cube(1, 2, 3). % inline"),
+            ("comment between rule clauses", "foo(X) :-\n    bar(X).\n% between\nbaz(Y) :-\n    qux(Y)."),
+            ("two comments between clauses", "foo(1).\n% c1\n% c2\nbar(2)."),
+            ("comment in add_expr", "main :-\n    outerPipe(240) + (outerPipe(240) |> translate(160, 0, 0))\n    % honi\n    + (outerPipe(40) |> rotate(0, -120, 0) |> translate(160, 0, 0))."),
+            ("blank line between goals", "p :-\n    a,\n\n    b."),
+            ("two blank lines between goals", "p :-\n    a,\n\n\n    b."),
+        ];
+        for (label, src) in cases {
+            let tree = parse(src);
+            eprintln!("=== {} ===", label);
+            dump_tree(tree.root_node(), src.as_bytes(), 0);
+            let formatted = format(src);
+            eprintln!("formatted: {:?}", formatted);
+            eprintln!();
+        }
     }
 
     #[test]
