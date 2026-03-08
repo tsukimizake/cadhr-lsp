@@ -65,7 +65,8 @@ fn extract_use_info(node: Node, source: &str) -> Option<UseInfo> {
 
 pub fn resolve_module_file(module_path: &str, current_file: &Path) -> Option<PathBuf> {
     let dir = current_file.parent()?;
-    let candidate = dir.join(format!("{}.cadhr", module_path));
+    let trimmed = module_path.trim_end_matches('/');
+    let candidate = dir.join(trimmed).join("db.cadhr");
     candidate.is_file().then_some(candidate)
 }
 

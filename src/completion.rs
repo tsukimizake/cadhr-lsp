@@ -134,6 +134,12 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "revolve($1)",
         ),
         builtin(
+            "sweep_extrude",
+            "sweep_extrude(Profile, Path)",
+            "Sweep a 2D profile along a 2D path (path interpreted in XZ plane)",
+            "sweep_extrude($1)",
+        ),
+        builtin(
             "polyhedron",
             "polyhedron(Points, Faces)",
             "Polyhedron from vertex list and face index lists",
@@ -144,12 +150,6 @@ pub fn builtin_completion_items() -> Vec<CompletionItem> {
             "stl(\"path/to/file.stl\")",
             "Import mesh from STL file",
             "stl(\"$1\")",
-        ),
-        builtin(
-            "color",
-            "color(Shape, R, G, B)",
-            "Set preview color (RGB: 0.0–1.0)",
-            "color($1)",
         ),
         builtin(
             "control",

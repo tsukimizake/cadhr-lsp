@@ -168,6 +168,26 @@ impl LanguageServer for CadhrBackend {
             }
 
             let (name, _) = atom_at(&tree, text, pos)?;
+
+            // qualified name (e.g. ive_reararck::main): jump into module file
+            if let Some((module_prefix, local_name)) = name.split_once("::") {
+                let use_directives = collect_use_directives(&tree, text);
+                let current_file = Path::new(uri.path());
+                let ud = use_directives.iter().find(|ud| {
+                    module_name_from_use_path(&ud.module_path) == module_prefix
+                })?;
+                let target = resolve_module_file(&ud.module_path, current_file)?;
+                let target_source = std::fs::read_to_string(&target).ok()?;
+                let target_tree = self.parse(&target_source)?;
+                let target_clauses = collect_clauses(&target_tree, &target_source);
+                let target_uri = Url::from_file_path(&target).ok()?;
+                let ci = target_clauses.iter().find(|c| c.head_name == local_name)?;
+                return Some(GotoDefinitionResponse::Scalar(Location {
+                    uri: target_uri,
+                    range: ci.head_range,
+                }));
+            }
+
             let clauses = collect_clauses(&tree, text);
             clauses
                 .iter()
@@ -229,27 +249,41 @@ fn atom_at(
         row: pos.line as usize,
         column: pos.character as usize,
     };
-    tree.root_node()
-        .descendant_for_point_range(point, point)
-        .and_then(|node| match node.kind() {
-            "unquoted_atom" => Some(node),
-            "atom" => node.child(0),
-            _ => None,
-        })
-        .and_then(|atom| {
-            let name = atom.utf8_text(source.as_bytes()).ok()?;
-            let range = Range {
-                start: Position {
-                    line: atom.start_position().row as u32,
-                    character: atom.start_position().column as u32,
-                },
-                end: Position {
-                    line: atom.end_position().row as u32,
-                    character: atom.end_position().column as u32,
-                },
-            };
-            Some((name.to_string(), range))
-        })
+    let leaf = tree
+        .root_node()
+        .descendant_for_point_range(point, point)?;
+
+    let atom_node = match leaf.kind() {
+        "unquoted_atom" => leaf,
+        "atom" => leaf.child(0)?,
+        _ => return None,
+    };
+
+    // qualified_atom (e.g. module::name) の場合は全体を返す
+    let target = if let Some(parent) = atom_node.parent() {
+        if parent.kind() == "atom" {
+            parent.parent().filter(|gp| gp.kind() == "qualified_atom").unwrap_or(parent)
+        } else if parent.kind() == "qualified_atom" {
+            parent
+        } else {
+            atom_node
+        }
+    } else {
+        atom_node
+    };
+
+    let name = target.utf8_text(source.as_bytes()).ok()?;
+    let range = Range {
+        start: Position {
+            line: target.start_position().row as u32,
+            character: target.start_position().column as u32,
+        },
+        end: Position {
+            line: target.end_position().row as u32,
+            character: target.end_position().column as u32,
+        },
+    };
+    Some((name.to_string(), range))
 }
 
 fn use_directive_goto(
@@ -293,4 +327,13 @@ fn use_directive_goto(
         }
     }
     None
+}
+
+fn module_name_from_use_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    std::path::Path::new(trimmed)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
