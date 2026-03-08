@@ -485,16 +485,19 @@ fn format_paren_expr(node: Node, src: &[u8], indent: usize) -> String {
 fn format_default_var(node: Node, src: &[u8]) -> String {
     let mut var = String::new();
     let mut num = String::new();
+    let mut op = "=";
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
         match child.kind() {
             "variable" => var = node_text(&child, src).to_string(),
             "number" => num = node_text(&child, src).to_string(),
+            ":=" => op = ":=",
+            "=" => op = "=",
             _ => {}
         }
     }
-    format!("{}@{}", var, num)
+    format!("{}{}{}", var, op, num)
 }
 
 fn format_range_var(node: Node, src: &[u8]) -> String {
@@ -653,7 +656,12 @@ mod tests {
 
     #[test]
     fn test_default_var() {
-        assert_eq!(format("X@5."), "X@5.\n");
+        assert_eq!(format("X=5."), "X=5.\n");
+    }
+
+    #[test]
+    fn test_editable_var() {
+        assert_eq!(format("X:=5."), "X:=5.\n");
     }
 
     #[test]
@@ -728,11 +736,11 @@ blade_cut :-
       line_to(p(0, 40)),
       % 裏スキ
       bezier_to(p(3, 30), p(2, 10))]),
-    control(X1@16, Y1@34, 0),
-    control(X2@8, Y2@36, 0).";
+    control(X1=16, Y1=34, 0),
+    control(X2=8, Y2=36, 0).";
         let result = format(input);
         assert!(result.contains("% 表面"), "表面 comment preserved");
         assert!(result.contains("% 裏スキ"), "裏スキ comment preserved");
-        assert!(result.contains("control(X1@16, Y1@34, 0)"));
+        assert!(result.contains("control(X1=16, Y1=34, 0)"));
     }
 }
