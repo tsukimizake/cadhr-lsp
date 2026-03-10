@@ -492,7 +492,6 @@ fn format_default_var(node: Node, src: &[u8]) -> String {
         match child.kind() {
             "variable" => var = node_text(&child, src).to_string(),
             "number" => num = node_text(&child, src).to_string(),
-            ":=" => op = ":=",
             "=" => op = "=",
             _ => {}
         }
@@ -657,11 +656,6 @@ mod tests {
     #[test]
     fn test_default_var() {
         assert_eq!(format("X=5."), "X=5.\n");
-    }
-
-    #[test]
-    fn test_editable_var() {
-        assert_eq!(format("X:=5."), "X:=5.\n");
     }
 
     #[test]
