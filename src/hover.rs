@@ -40,13 +40,13 @@ fn functor_doc(name: &str) -> Option<&'static str> {
         ),
         "tetrahedron" => Some("**tetrahedron**\n\nRegular tetrahedron."),
         "union" => {
-            Some("**union(A, B)**\n\nBoolean union of shapes A and B. Also available as `A + B`.")
+            Some("**union(A, B)**\n\nBoolean union of shapes A and B. Also available as `A + B`.\n\nWorks with both 3D shapes and 2D polygons (sketchXY, circle, etc.).")
         }
         "difference" => Some(
-            "**difference(A, B)**\n\nBoolean difference: A minus B. Also available as `A - B`.",
+            "**difference(A, B)**\n\nBoolean difference: A minus B. Also available as `A - B`.\n\nWorks with both 3D shapes and 2D polygons (sketchXY, circle, etc.).",
         ),
         "intersection" => Some(
-            "**intersection(A, B)**\n\nBoolean intersection of shapes A and B. Also available as `A * B`.",
+            "**intersection(A, B)**\n\nBoolean intersection of shapes A and B. Also available as `A * B`.\n\nWorks with both 3D shapes and 2D polygons (sketchXY, circle, etc.).",
         ),
         "hull" => Some(
             "**hull(A, B)**\n\nConvex hull of shapes A and B.",
