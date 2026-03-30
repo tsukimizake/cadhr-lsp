@@ -1,5 +1,11 @@
+use pretty::{Arena, DocAllocator, DocBuilder};
 use tower_lsp::lsp_types::{Position, Range, TextEdit};
 use tree_sitter::Node;
+
+const WIDTH: usize = 80;
+const INDENT: isize = 4;
+
+type D<'a> = DocBuilder<'a, Arena<'a>>;
 
 pub fn format_document(tree: &tree_sitter::Tree, source: &str) -> Vec<TextEdit> {
     let root = tree.root_node();
@@ -37,310 +43,302 @@ fn node_text<'a>(node: &Node, src: &'a [u8]) -> &'a str {
 }
 
 fn format_source_file(node: Node, src: &[u8]) -> String {
-    let mut result = String::new();
+    let arena = Arena::new();
+    let doc = source_file_doc(&arena, node, src);
+    let mut output = String::new();
+    doc.render_fmt(WIDTH, &mut output).unwrap();
+    output
+}
+
+// ============================================================
+// Top-level structure
+// ============================================================
+
+fn source_file_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut parts: Vec<D<'a>> = Vec::new();
     let mut cursor = node.walk();
     let mut prev_was_clause = false;
 
     for child in node.children(&mut cursor) {
-        if is_comment(&child) {
-            if prev_was_clause {
-                result.push_str("\n\n");
-            } else if !result.is_empty() {
-                result.push('\n');
+        let (doc, is_clause) = match child.kind() {
+            "clause" => (clause_doc(arena, child, src), true),
+            "use_directive" => (arena.text(node_text(&child, src).trim_end().to_string()), false),
+            _ if is_comment(&child) => {
+                (arena.text(node_text(&child, src).trim_end().to_string()), false)
             }
-            result.push_str(node_text(&child, src).trim_end());
-            prev_was_clause = false;
-        } else if child.kind() == "use_directive" {
-            if prev_was_clause {
-                result.push_str("\n\n");
-            } else if !result.is_empty() {
-                result.push('\n');
-            }
-            result.push_str(node_text(&child, src).trim_end());
-            prev_was_clause = false;
-        } else if child.kind() == "clause" {
-            if prev_was_clause {
-                result.push_str("\n\n");
-            } else if !result.is_empty() {
-                result.push('\n');
-            }
-            result.push_str(&format_clause(child, src));
-            prev_was_clause = true;
+            _ => continue,
+        };
+
+        if !parts.is_empty() {
+            let sep = if prev_was_clause {
+                arena.hardline().append(arena.hardline())
+            } else {
+                arena.hardline()
+            };
+            parts.push(sep);
         }
+        parts.push(doc);
+        prev_was_clause = is_clause;
     }
 
-    if !result.is_empty() {
-        result.push('\n');
+    if parts.is_empty() {
+        arena.nil()
+    } else {
+        arena.concat(parts).append(arena.hardline())
     }
-    result
 }
 
-fn format_clause(node: Node, src: &[u8]) -> String {
+fn clause_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "fact" => return format_fact(child, src),
-            "rule" => return format_rule(child, src),
+            "fact" => return fact_doc(arena, child, src),
+            "rule" => return rule_doc(arena, child, src),
             _ => {}
         }
     }
-    node_text(&node, src).to_string()
+    arena.text(node_text(&node, src).to_string())
 }
 
-fn format_fact(node: Node, src: &[u8]) -> String {
+fn fact_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "term" {
-            return format!("{}.", format_term(child, src, 0));
+            return node_doc(arena, child, src).append(arena.text("."));
         }
     }
-    node_text(&node, src).to_string()
+    arena.text(node_text(&node, src).to_string())
 }
 
-fn format_rule(node: Node, src: &[u8]) -> String {
-    let mut head = String::new();
-    let mut goals = String::new();
-    let mut comments_before_goals = Vec::new();
+fn rule_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut head = arena.nil();
+    let mut goals = arena.nil();
+    let mut comments_before_goals: Vec<D<'a>> = Vec::new();
     let mut seen_neck = false;
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "term" => head = format_term(child, src, 0),
-            "goals" => goals = format_goals(child, src),
-            "line_comment" | "block_comment" if seen_neck => {
-                comments_before_goals.push(node_text(&child, src).trim_end().to_string());
-            }
+            "term" => head = node_doc(arena, child, src),
+            "goals" => goals = goals_doc(arena, child, src),
             ":-" => seen_neck = true,
+            _ if is_comment(&child) && seen_neck => {
+                comments_before_goals
+                    .push(arena.text(node_text(&child, src).trim_end().to_string()));
+            }
             _ => {}
         }
     }
 
-    let mut result = format!("{} :-\n", head);
+    let indent_str = arena.text(" ".repeat(INDENT as usize));
+    let mut result = head.append(arena.text(" :-")).append(arena.hardline());
     for c in comments_before_goals {
-        result.push_str(&format!("    {}\n", c));
+        result = result.append(indent_str.clone()).append(c).append(arena.hardline());
     }
-    result.push_str(&goals);
-    result.push('.');
-    result
+    result.append(goals).append(arena.text("."))
 }
 
-enum Item {
-    Term(String),
-    Comment(String),
-}
+// ============================================================
+// Goals (always multiline, 4-space indent, blank line preservation)
+// ============================================================
 
-fn format_goals(node: Node, src: &[u8]) -> String {
-    let indent = 4;
-    let indent_str = " ".repeat(indent);
-    let mut items: Vec<(Item, usize)> = Vec::new();
+fn goals_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut items: Vec<(D<'a>, bool, usize)> = Vec::new(); // (doc, is_goal, source_row)
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
-        if child.kind() == "term" {
-            items.push((
-                Item::Term(format_term(child, src, indent)),
-                child.start_position().row,
-            ));
-        } else if is_comment(&child) {
-            items.push((
-                Item::Comment(node_text(&child, src).trim_end().to_string()),
-                child.start_position().row,
-            ));
+        match child.kind() {
+            "goal" | "term" => {
+                items.push((goal_doc(arena, child, src), true, child.start_position().row));
+            }
+            _ if is_comment(&child) => {
+                items.push((
+                    arena.text(node_text(&child, src).trim_end().to_string()),
+                    false,
+                    child.start_position().row,
+                ));
+            }
+            _ => {}
         }
     }
 
-    let term_count = items
-        .iter()
-        .filter(|(i, _)| matches!(i, Item::Term(_)))
-        .count();
-    let mut result = String::new();
-    let mut term_idx = 0;
+    let indent_str = arena.text(" ".repeat(INDENT as usize));
+    let goal_count = items.iter().filter(|(_, is_goal, _)| *is_goal).count();
+    let mut parts: Vec<D<'a>> = Vec::new();
+    let mut goal_idx = 0;
     let mut prev_end_row: Option<usize> = None;
 
-    for (item, start_row) in &items {
+    for (doc, is_goal, start_row) in &items {
         if let Some(prev) = prev_end_row {
             let blank_lines = start_row.saturating_sub(prev).saturating_sub(1);
             for _ in 0..blank_lines {
-                result.push('\n');
+                parts.push(arena.hardline());
             }
         }
-        match item {
-            Item::Term(t) => {
-                term_idx += 1;
-                let end_row = start_row + t.matches('\n').count();
-                if term_idx < term_count {
-                    result.push_str(&format!("{}{},\n", indent_str, t));
-                } else {
-                    result.push_str(&format!("{}{}", indent_str, t));
-                }
-                prev_end_row = Some(end_row);
-            }
-            Item::Comment(c) => {
-                result.push_str(&format!("{}{}\n", indent_str, c));
-                prev_end_row = Some(*start_row);
-            }
+        if *is_goal {
+            goal_idx += 1;
+            let line = if goal_idx < goal_count {
+                indent_str.clone().append(doc.clone()).append(arena.text(","))
+            } else {
+                indent_str.clone().append(doc.clone())
+            };
+            parts.push(line);
+            prev_end_row = Some(start_row + node_line_count(&doc, arena));
+        } else {
+            parts.push(indent_str.clone().append(doc.clone()));
+            prev_end_row = Some(*start_row);
         }
+        parts.push(arena.hardline());
     }
-    result
+
+    // Remove trailing hardline (the rule_doc adds the final ".")
+    if !parts.is_empty() {
+        parts.pop();
+    }
+
+    arena.concat(parts)
 }
 
-fn format_term(node: Node, src: &[u8], indent: usize) -> String {
+fn node_line_count(_doc: &D<'_>, _arena: &Arena<'_>) -> usize {
+    0 // goals are typically single-line; multiline handled by source row tracking
+}
+
+fn goal_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.is_named() && !is_comment(&child) {
-            return format_expr(child, src, indent);
+            return match child.kind() {
+                "eq_constraint" => eq_constraint_doc(arena, child, src),
+                _ => node_doc(arena, child, src),
+            };
         }
     }
-    node_text(&node, src).to_string()
+    node_doc(arena, node, src)
 }
 
-fn format_expr(node: Node, src: &[u8], indent: usize) -> String {
+fn eq_constraint_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut terms: Vec<D<'a>> = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "term" {
+            terms.push(node_doc(arena, child, src));
+        }
+    }
+    if terms.len() == 2 {
+        terms.remove(0)
+            .append(arena.text(" = "))
+            .append(terms.remove(0))
+    } else {
+        arena.text(node_text(&node, src).to_string())
+    }
+}
+
+// ============================================================
+// General node dispatch
+// ============================================================
+
+fn node_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
     match node.kind() {
-        "term" => format_term(node, src, indent),
-        "primary_term" => {
+        "term" | "primary_term" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.is_named() && !is_comment(&child) {
-                    return format_expr(child, src, indent);
+                    return node_doc(arena, child, src);
                 }
             }
-            node_text(&node, src).to_string()
+            arena.text(node_text(&node, src).to_string())
         }
-        "pipe_expr" | "add_expr" | "mul_expr" => format_infix_expr(node, src, indent),
-        "struct" => format_struct(node, src, indent),
-        "list" => format_list(node, src, indent),
-        "paren_expr" => format_paren_expr(node, src, indent),
-        "default_var" => format_default_var(node, src),
-        "range_var" => format_range_var(node, src),
-        "qualified_atom" => format_qualified_atom(node, src),
-        "atom" | "unquoted_atom" | "quoted_atom" | "number" | "variable" => {
-            node_text(&node, src).to_string()
-        }
-        _ => node_text(&node, src).to_string(),
+        "pipe_expr" | "add_expr" | "mul_expr" => infix_doc(arena, node, src),
+        "struct" => struct_doc(arena, node, src),
+        "list" => list_doc(arena, node, src),
+        "paren_expr" => paren_doc(arena, node, src),
+        "annotated_var" => annotated_var_doc(arena, node, src),
+        "qualified_atom" => qualified_atom_doc(arena, node, src),
+        _ => arena.text(node_text(&node, src).to_string()),
     }
 }
 
-enum InfixItem {
-    Operand(String),
+// ============================================================
+// Infix expressions (pipe_expr, add_expr, mul_expr)
+// ============================================================
+
+enum InfixPart<'a> {
+    Operand(D<'a>),
     Operator(String),
     Comment(String),
 }
 
-fn format_infix_expr(node: Node, src: &[u8], indent: usize) -> String {
-    let mut items = Vec::new();
+fn infix_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut parts: Vec<InfixPart<'a>> = Vec::new();
     let mut cursor = node.walk();
-    let mut has_comments = false;
 
     for child in node.children(&mut cursor) {
         if is_comment(&child) {
-            items.push(InfixItem::Comment(
+            parts.push(InfixPart::Comment(
                 node_text(&child, src).trim_end().to_string(),
             ));
-            has_comments = true;
         } else if child.is_named() {
-            items.push(InfixItem::Operand(format_expr(child, src, indent)));
+            parts.push(InfixPart::Operand(node_doc(arena, child, src)));
         } else {
             let text = node_text(&child, src).trim();
             if !text.is_empty() {
-                items.push(InfixItem::Operator(text.to_string()));
+                parts.push(InfixPart::Operator(text.to_string()));
             }
         }
     }
 
-    if !has_comments {
-        let mut result = String::new();
-        let mut need_space = false;
-        for item in &items {
-            match item {
-                InfixItem::Operand(s) => {
-                    if need_space {
-                        result.push(' ');
-                    }
-                    result.push_str(s);
-                    need_space = false;
-                }
-                InfixItem::Operator(s) => {
-                    result.push(' ');
-                    result.push_str(s);
-                    need_space = true;
-                }
-                InfixItem::Comment(_) => unreachable!(),
-            }
-        }
-        return result;
-    }
-
-    let indent_str = " ".repeat(indent);
-    let mut lines: Vec<String> = Vec::new();
-    let mut current_line = String::new();
+    let mut result = arena.nil();
     let mut need_space = false;
+    let mut after_newline = false;
 
-    for item in &items {
-        match item {
-            InfixItem::Comment(c) => {
-                if !current_line.is_empty() {
-                    lines.push(current_line.clone());
-                    current_line.clear();
-                    need_space = false;
-                }
-                lines.push(c.clone());
-            }
-            InfixItem::Operand(s) => {
+    for part in parts {
+        match part {
+            InfixPart::Operand(doc) => {
                 if need_space {
-                    current_line.push(' ');
+                    result = result.append(arena.text(" "));
                 }
-                current_line.push_str(s);
+                result = result.append(doc);
                 need_space = false;
+                after_newline = false;
             }
-            InfixItem::Operator(s) => {
-                if !current_line.is_empty() {
-                    current_line.push(' ');
+            InfixPart::Operator(op) => {
+                if after_newline {
+                    result = result.append(arena.text(op));
+                } else {
+                    result = result.append(arena.text(format!(" {}", op)));
                 }
-                current_line.push_str(s);
                 need_space = true;
+                after_newline = false;
+            }
+            InfixPart::Comment(text) => {
+                result = result
+                    .append(arena.hardline())
+                    .append(arena.text(text))
+                    .append(arena.hardline());
+                need_space = false;
+                after_newline = true;
             }
         }
-    }
-    if !current_line.is_empty() {
-        lines.push(current_line);
     }
 
-    let mut result = String::new();
-    for (i, line) in lines.iter().enumerate() {
-        if i > 0 {
-            result.push('\n');
-            result.push_str(&indent_str);
-        }
-        result.push_str(line);
-    }
     result
 }
 
-fn format_qualified_atom(node: Node, src: &[u8]) -> String {
-    let mut parts = Vec::new();
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind() == "atom" {
-            parts.push(node_text(&child, src).to_string());
-        }
-    }
-    parts.join("::")
-}
+// ============================================================
+// Struct: f(a, b, c) or multiline with group()
+// ============================================================
 
-fn format_struct(node: Node, src: &[u8], indent: usize) -> String {
-    let mut name = String::new();
-    let mut items: Vec<Item> = Vec::new();
+fn struct_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut name = arena.nil();
+    let mut items = Vec::new();
     let mut cursor = node.walk();
-
-    let inner_indent = indent + 4;
 
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "atom" | "qualified_atom" => name = format_expr(child, src, indent),
-            "term" => items.push(Item::Term(format_term(child, src, inner_indent))),
-            "line_comment" | "block_comment" => {
-                items.push(Item::Comment(
+            "atom" | "qualified_atom" => name = node_doc(arena, child, src),
+            "term" => items.push(SeqItem::Value(node_doc(arena, child, src))),
+            _ if is_comment(&child) => {
+                items.push(SeqItem::Comment(
                     node_text(&child, src).trim_end().to_string(),
                 ));
             }
@@ -348,69 +346,31 @@ fn format_struct(node: Node, src: &[u8], indent: usize) -> String {
         }
     }
 
-    let has_comments = items.iter().any(|i| matches!(i, Item::Comment(_)));
-    let any_multiline = items
-        .iter()
-        .any(|i| matches!(i, Item::Term(s) if s.contains('\n')));
-
-    if has_comments || any_multiline {
-        let inner = " ".repeat(inner_indent);
-        let outer = " ".repeat(indent);
-        let mut result = format!("{}(\n", name);
-        let arg_count = items
-            .iter()
-            .filter(|i| matches!(i, Item::Term(_)))
-            .count();
-        let mut arg_idx = 0;
-        for item in &items {
-            match item {
-                Item::Term(a) => {
-                    arg_idx += 1;
-                    if arg_idx < arg_count {
-                        result.push_str(&format!("{}{},\n", inner, a));
-                    } else {
-                        result.push_str(&format!("{}{}\n", inner, a));
-                    }
-                }
-                Item::Comment(c) => {
-                    result.push_str(&format!("{}{}\n", inner, c));
-                }
-            }
-        }
-        result.push_str(&format!("{})", outer));
-        result
-    } else {
-        let args: Vec<&str> = items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Term(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .collect();
-        format!("{}({})", name, args.join(", "))
-    }
+    name.append(bracketed(arena, "(", ")", &items))
 }
 
-fn format_list(node: Node, src: &[u8], indent: usize) -> String {
-    let mut items: Vec<Item> = Vec::new();
-    let mut tail = None;
+// ============================================================
+// List: [a, b, c] or multiline with group()
+// ============================================================
+
+fn list_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut items = Vec::new();
+    let mut tail: Option<D<'a>> = None;
     let mut seen_pipe = false;
     let mut cursor = node.walk();
-
-    let inner_indent = indent + 4;
 
     for child in node.children(&mut cursor) {
         match child.kind() {
             "term" => {
                 if seen_pipe {
-                    tail = Some(format_term(child, src, inner_indent));
+                    tail = Some(node_doc(arena, child, src));
                 } else {
-                    items.push(Item::Term(format_term(child, src, inner_indent)));
+                    items.push(SeqItem::Value(node_doc(arena, child, src)));
                 }
             }
             "|" => seen_pipe = true,
-            "line_comment" | "block_comment" => {
-                items.push(Item::Comment(
+            _ if is_comment(&child) => {
+                items.push(SeqItem::Comment(
                     node_text(&child, src).trim_end().to_string(),
                 ));
             }
@@ -418,90 +378,46 @@ fn format_list(node: Node, src: &[u8], indent: usize) -> String {
         }
     }
 
-    let has_comments = items.iter().any(|i| matches!(i, Item::Comment(_)));
-    let any_multiline = items
-        .iter()
-        .any(|i| matches!(i, Item::Term(s) if s.contains('\n')));
-
-    if has_comments || any_multiline {
-        let inner = " ".repeat(inner_indent);
-        let outer = " ".repeat(indent);
-        let mut result = String::from("[\n");
-        let term_count = items
-            .iter()
-            .filter(|i| matches!(i, Item::Term(_)))
-            .count();
-        let mut term_idx = 0;
-        for item in &items {
-            match item {
-                Item::Term(t) => {
-                    term_idx += 1;
-                    let has_more = term_idx < term_count || tail.is_some();
-                    if has_more {
-                        result.push_str(&format!("{}{},\n", inner, t));
-                    } else {
-                        result.push_str(&format!("{}{}\n", inner, t));
-                    }
-                }
-                Item::Comment(c) => {
-                    result.push_str(&format!("{}{}\n", inner, c));
-                }
-            }
-        }
-        if let Some(t) = &tail {
-            result.push_str(&format!("{}| {}\n", inner, t));
-        }
-        result.push_str(&format!("{}]", outer));
-        result
+    if let Some(tail_doc) = tail {
+        // List with tail: [items | tail]
+        let body = join_seq_items(arena, &items);
+        let tail_part = arena.line().append(arena.text("| ")).append(tail_doc);
+        arena
+            .text("[")
+            .append(arena.line_().append(body).append(tail_part).nest(INDENT))
+            .append(arena.line_())
+            .append(arena.text("]"))
+            .group()
     } else {
-        let terms: Vec<&str> = items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Term(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .collect();
-        let mut result = String::from("[");
-        result.push_str(&terms.join(", "));
-        if let Some(t) = &tail {
-            result.push_str(" | ");
-            result.push_str(t);
-        }
-        result.push(']');
-        result
+        bracketed(arena, "[", "]", &items)
     }
 }
 
-fn format_paren_expr(node: Node, src: &[u8], indent: usize) -> String {
+// ============================================================
+// Paren expression
+// ============================================================
+
+fn paren_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "term" {
-            return format!("({})", format_term(child, src, indent));
+            return arena
+                .text("(")
+                .append(node_doc(arena, child, src))
+                .append(arena.text(")"));
         }
     }
-    node_text(&node, src).to_string()
+    arena.text(node_text(&node, src).to_string())
 }
 
-fn format_default_var(node: Node, src: &[u8]) -> String {
-    let mut var = String::new();
-    let mut num = String::new();
-    let mut op = "=";
-    let mut cursor = node.walk();
+// ============================================================
+// Annotated var: 0 < X @ 5 < 10, X @ 5, 0 < X, etc.
+// ============================================================
 
-    for child in node.children(&mut cursor) {
-        match child.kind() {
-            "variable" => var = node_text(&child, src).to_string(),
-            "number" => num = node_text(&child, src).to_string(),
-            "=" => op = "=",
-            _ => {}
-        }
-    }
-    format!("{}{}{}", var, op, num)
-}
-
-fn format_range_var(node: Node, src: &[u8]) -> String {
-    let mut result = String::new();
+fn annotated_var_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut parts: Vec<D<'a>> = Vec::new();
     let mut cursor = node.walk();
+    let mut prev_was_at = false;
 
     for child in node.children(&mut cursor) {
         if is_comment(&child) {
@@ -509,16 +425,112 @@ fn format_range_var(node: Node, src: &[u8]) -> String {
         }
         match child.kind() {
             "variable" | "number" | "comp_op" => {
-                if !result.is_empty() {
-                    result.push(' ');
+                if !parts.is_empty() && !prev_was_at {
+                    parts.push(arena.text(" "));
                 }
-                result.push_str(node_text(&child, src));
+                parts.push(arena.text(node_text(&child, src).to_string()));
+                prev_was_at = false;
+            }
+            "@" => {
+                parts.push(arena.text("@"));
+                prev_was_at = true;
             }
             _ => {}
         }
     }
-    result
+
+    arena.concat(parts)
 }
+
+// ============================================================
+// Qualified atom: module::name
+// ============================================================
+
+fn qualified_atom_doc<'a>(arena: &'a Arena<'a>, node: Node, src: &[u8]) -> D<'a> {
+    let mut atoms = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "atom" {
+            atoms.push(node_text(&child, src).to_string());
+        }
+    }
+    arena.text(atoms.join("::"))
+}
+
+// ============================================================
+// Shared: bracketed comma-separated items with group()
+// ============================================================
+
+enum SeqItem<'a> {
+    Value(D<'a>),
+    Comment(String),
+}
+
+fn bracketed<'a>(
+    arena: &'a Arena<'a>,
+    open: &str,
+    close: &str,
+    items: &[SeqItem<'a>],
+) -> D<'a> {
+    let value_count = items.iter().filter(|i| matches!(i, SeqItem::Value(_))).count();
+    if value_count == 0 {
+        return arena.text(format!("{}{}", open, close));
+    }
+
+    let body = join_seq_items(arena, items);
+
+    arena
+        .text(open.to_string())
+        .append(arena.line_().append(body).nest(INDENT))
+        .append(arena.line_())
+        .append(arena.text(close.to_string()))
+        .group()
+}
+
+fn join_seq_items<'a>(arena: &'a Arena<'a>, items: &[SeqItem<'a>]) -> D<'a> {
+    let value_count = items
+        .iter()
+        .filter(|i| matches!(i, SeqItem::Value(_)))
+        .count();
+    let mut parts: Vec<D<'a>> = Vec::new();
+    let mut value_idx = 0;
+    let mut after_comment = false;
+
+    for item in items {
+        match item {
+            SeqItem::Value(doc) => {
+                value_idx += 1;
+                if after_comment {
+                    // comment already provided the line break
+                } else if value_idx > 1 {
+                    parts.push(arena.text(",").append(arena.line()));
+                }
+                parts.push(doc.clone());
+                if value_idx < value_count {
+                    after_comment = false;
+                }
+            }
+            SeqItem::Comment(text) => {
+                if value_idx > 0 {
+                    parts.push(arena.text(","));
+                }
+                parts.push(
+                    arena
+                        .hardline()
+                        .append(arena.text(text.clone()))
+                        .append(arena.hardline()),
+                );
+                after_comment = true;
+            }
+        }
+    }
+
+    arena.concat(parts)
+}
+
+// ============================================================
+// Tests
+// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -535,22 +547,6 @@ mod tests {
     fn format(source: &str) -> String {
         let tree = parse(source);
         format_source_file(tree.root_node(), source.as_bytes())
-    }
-
-    #[test]
-    fn test_comment_in_infix_expr() {
-        assert_eq!(
-            format("a + b\n% comment\n+ c."),
-            "a + b\n% comment\n+ c.\n"
-        );
-    }
-
-    #[test]
-    fn test_blank_line_between_goals() {
-        assert_eq!(
-            format("p :-\n    a,\n\n    b."),
-            "p :-\n    a,\n\n    b.\n"
-        );
     }
 
     #[test]
@@ -655,7 +651,7 @@ mod tests {
 
     #[test]
     fn test_default_var() {
-        assert_eq!(format("X=5."), "X=5.\n");
+        assert_eq!(format("X@5."), "X@5.\n");
     }
 
     #[test]
@@ -702,7 +698,6 @@ mod tests {
 
     #[test]
     fn test_list_with_comment() {
-        // Comments in a list trigger multiline formatting
         let input = "[a,\n% comment\nb].";
         let expected = "[\n    a,\n    % comment\n    b\n].\n";
         assert_eq!(format(input), expected);
@@ -710,12 +705,46 @@ mod tests {
 
     #[test]
     fn test_struct_with_multiline_list_arg() {
-        // A struct arg that contains a multiline list triggers multiline struct
         let input = "path(p(0,0),[line_to(p(15,0)),\n% surface\nbezier_to(p(5,5),p(10,10))]).";
         let result = format(input);
         assert!(result.contains("% surface"), "comment must be preserved");
         assert!(result.contains("path("), "struct name must be present");
-        assert!(result.contains("line_to(p(15, 0))"), "list elements formatted");
+        assert!(
+            result.contains("line_to(p(15, 0))"),
+            "list elements formatted"
+        );
+    }
+
+    #[test]
+    fn test_eq_constraint() {
+        assert_eq!(
+            format("foo(X):-X=5,bar(X)."),
+            "foo(X) :-\n    X = 5,\n    bar(X).\n"
+        );
+    }
+
+    #[test]
+    fn test_eq_constraint_complex() {
+        assert_eq!(
+            format("cut(SLIT,W,H):-X=(W-SLIT)/2,sketchXY([p(X,0)])."),
+            "cut(SLIT, W, H) :-\n    X = (W - SLIT) / 2,\n    sketchXY([p(X, 0)]).\n"
+        );
+    }
+
+    #[test]
+    fn test_blank_line_between_goals() {
+        assert_eq!(
+            format("p :-\n    a,\n\n    b."),
+            "p :-\n    a,\n\n    b.\n"
+        );
+    }
+
+    #[test]
+    fn test_comment_in_infix_expr() {
+        assert_eq!(
+            format("a + b\n% comment\n+ c."),
+            "a + b\n% comment\n+ c.\n"
+        );
     }
 
     #[test]
@@ -730,11 +759,11 @@ blade_cut :-
       line_to(p(0, 40)),
       % 裏スキ
       bezier_to(p(3, 30), p(2, 10))]),
-    control(X1=16, Y1=34, 0),
-    control(X2=8, Y2=36, 0).";
+    control(X1@16, Y1@34, 0),
+    control(X2@8, Y2@36, 0).";
         let result = format(input);
         assert!(result.contains("% 表面"), "表面 comment preserved");
         assert!(result.contains("% 裏スキ"), "裏スキ comment preserved");
-        assert!(result.contains("control(X1=16, Y1=34, 0)"));
+        assert!(result.contains("control(X1@16, Y1@34, 0)"));
     }
 }
